@@ -4,7 +4,7 @@
 
 package frc.robot.subsystems;
 
-
+// import libraries
 import org.photonvision.EstimatedRobotPose;
 import org.photonvision.PhotonCamera;
 import org.photonvision.PhotonPoseEstimator;
@@ -56,8 +56,10 @@ import frc.utils.SwerveUtils;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
+// intitalize driving motors 
 public class DriveSubsystem extends SubsystemBase {
-  // Create MAXSwerveModules
+
+  // Create MAXSwerveModules with corresponding IDs from constants
   private final MAXSwerveModule m_frontLeft = new MAXSwerveModule(
       DriveConstants.kFrontLeftDrivingCanId,
       DriveConstants.kFrontLeftTurningCanId,
@@ -74,24 +76,31 @@ public class DriveSubsystem extends SubsystemBase {
       DriveConstants.kBackLeftChassisAngularOffset);
 
   private final MAXSwerveModule m_rearRight = new MAXSwerveModule(
+    // for turning and driving motors
       DriveConstants.kRearRightDrivingCanId,
       DriveConstants.kRearRightTurningCanId,
+      // set the angluar offset of the motor relative to the chassis (for aligning)
       DriveConstants.kBackRightChassisAngularOffset);
 
-  // private Vision m_vision = new Vision();
+  // creates 2d field for simulation
   private final Field2d m_field = new Field2d();
-  // The gyro sensor
+
+  // The gyro sensor (angular rate and heading sensor -> measures speed of turning and orientation)
   public final AHRS m_gyro = new AHRS(SPI.Port.kMXP);
 
-  // Slew rate filter variables for controlling lateral acceleration
-  private double m_currentRotation = 0.0;
-  private double m_currentTranslationDir = 0.0;
-  private double m_currentTranslationMag = 0.0;
+  // current state of movement
+  private double m_currentRotation = 0.0; // Current rotational speed (right or left?)
+  private double m_currentTranslationDir = 0.0; // current direction of translation (movement --> going forward and backwards?)
+  private double m_currentTranslationMag = 0.0; // current speed of translation
 
+  // slew is how fast you can change the speed and rotation (avoids tipping)
   private SlewRateLimiter m_magLimiter = new SlewRateLimiter(DriveConstants.kMagnitudeSlewRate);
   private SlewRateLimiter m_rotLimiter = new SlewRateLimiter(DriveConstants.kRotationalSlewRate);
-  private double m_prevTime = WPIUtilJNI.now() * 1e-6;
 
+  // Initialize the previous time for time-based calculations
+  private double m_prevTime = WPIUtilJNI.now() * 1e-6; //1e - 6 is for converting nanoseconds to secs
+
+  //logging paths for robot's current pose, state of swere and desired swere state
   private final String POSE_LOG_PATH = "/Pose";
   private final String ACTUAL_SWERVE_STATE_LOG_PATH = "/ActualSwerveState";
   private final String DESIRED_SWERVE_STATE_LOG_PATH = "/DesiredSwerveState";
@@ -107,6 +116,7 @@ public class DriveSubsystem extends SubsystemBase {
   // m_rearRight.getPosition()
   // });
 
+  // Odometry class for tracking robot pose
   SwerveDrivePoseEstimator m_odometry;
 
   /**
@@ -129,11 +139,11 @@ public class DriveSubsystem extends SubsystemBase {
             new ReplanningConfig() // Default path replanning config. See the API for the options here
         ),
         () -> {
-          // Boolean supplier that controls when the path will be mirrored for the red
-          // alliance
+          // Boolean supplier that controls when the path will be mirrored for the red alliance
           // This will flip the path being followed to the red side of the field.
           // THE ORIGIN WILL REMAIN ON THE BLUE SIDE
 
+          // finds the alliance color
           var alliance = DriverStation.getAlliance();
           if (alliance.isPresent()) {
             return alliance.get() == DriverStation.Alliance.Red;
@@ -145,16 +155,22 @@ public class DriveSubsystem extends SubsystemBase {
     );
     // var stateStdDevs = VecBuilder.fill(0.1, 0.1, 0.1);
     // var visionStdDevs = VecBuilder.fill(1, 1, 1);
+
+    //estimate pose with odometry
     m_odometry = new SwerveDrivePoseEstimator(
+        // what does this do?
         DriveConstants.kDriveKinematics,
+        // current orientation of the robot (yaw) from the gyro sensor, converted to a Rotation2d object
         Rotation2d.fromDegrees(-m_gyro.getYaw()),
+        //get positions of motors 
         new SwerveModulePosition[] {
             m_frontLeft.getPosition(),
             m_frontRight.getPosition(),
             m_rearLeft.getPosition(),
             m_rearLeft.getPosition()
-        }, new Pose2d());
+        }, new Pose2d()); //Pose2d will represent to represent intial robot pose
 
+    // add to dashboard for visuals
     SmartDashboard.putData("Field", m_field);
   }
 
@@ -182,10 +198,12 @@ public class DriveSubsystem extends SubsystemBase {
     //           est.estimatedPose.toPose2d(), est.timestampSeconds, estStdDevs);
     //     });
 
+    // dashboard display and add to field simulator
     SmartDashboard.putNumber("Yaw", -m_gyro.getYaw());
     SmartDashboard.putNumber("Pitch", -m_gyro.getPitch());
     SmartDashboard.putNumber("Roll", -m_gyro.getRoll());
     m_field.setRobotPose(getPose());
+
     // SmartDashboard.putData("Pose", m_odometry.getEstimatedPosition());
     
     logOutputs();
@@ -227,18 +245,23 @@ public class DriveSubsystem extends SubsystemBase {
    *                      field.
    * @param rateLimit     Whether to enable rate limiting for smoother control.
    */
+
+  
+  // driving speed, varibles and rateLimit
   public void drive(double xSpeed, double ySpeed, double rot, boolean fieldRelative, boolean rateLimit) {
 
+    // variables to store the commanded speeds
     double xSpeedCommanded;
     double ySpeedCommanded;
 
+    // usually true for smooth controls in auto (can be false for testing or changed smoothness)
     if (rateLimit) {
-      // Convert XY to polar for rate limiting
+
+      // Convert XY to polar for rate limiting (smoother)
       double inputTranslationDir = Math.atan2(ySpeed, xSpeed);
       double inputTranslationMag = Math.sqrt(Math.pow(xSpeed, 2) + Math.pow(ySpeed, 2));
 
-      // Calculate the direction slew rate based on an estimate of the lateral
-      // acceleration
+      // Calculate the direction slew rate based on an estimate of the lateral acceleration
       double directionSlewRate;
       if (m_currentTranslationMag != 0.0) {
         directionSlewRate = Math.abs(DriveConstants.kDirectionSlewRate / m_currentTranslationMag);
@@ -247,16 +270,24 @@ public class DriveSubsystem extends SubsystemBase {
       }
 
       double currentTime = WPIUtilJNI.now() * 1e-6;
+      // time elapsed since prev update
       double elapsedTime = currentTime - m_prevTime;
+
+      // difference in angle of needed inputted vs. current translation
       double angleDif = SwerveUtils.AngleDifference(inputTranslationDir, m_currentTranslationDir);
+
+      // Adjust the current direction and magnitude based on the angle difference
       if (angleDif < 0.45 * Math.PI) {
         m_currentTranslationDir = SwerveUtils.StepTowardsCircular(m_currentTranslationDir, inputTranslationDir,
             directionSlewRate * elapsedTime);
+
         m_currentTranslationMag = m_magLimiter.calculate(inputTranslationMag);
       } else if (angleDif > 0.85 * Math.PI) {
         if (m_currentTranslationMag > 1e-4) { // some small number to avoid floating-point errors with equality checking
+          
           // keep currentTranslationDir unchanged
           m_currentTranslationMag = m_magLimiter.calculate(0.0);
+
         } else {
           m_currentTranslationDir = SwerveUtils.WrapAngle(m_currentTranslationDir + Math.PI);
           m_currentTranslationMag = m_magLimiter.calculate(inputTranslationMag);
@@ -266,12 +297,16 @@ public class DriveSubsystem extends SubsystemBase {
             directionSlewRate * elapsedTime);
         m_currentTranslationMag = m_magLimiter.calculate(0.0);
       }
+      
+      // update prev time
       m_prevTime = currentTime;
 
+      // update x, y speed and rotation based off current trans and dir
       xSpeedCommanded = m_currentTranslationMag * Math.cos(m_currentTranslationDir);
       ySpeedCommanded = m_currentTranslationMag * Math.sin(m_currentTranslationDir);
       m_currentRotation = m_rotLimiter.calculate(rot);
 
+    // speed and rotation based on input of speed 
     } else {
       xSpeedCommanded = xSpeed;
       ySpeedCommanded = ySpeed;
@@ -283,13 +318,18 @@ public class DriveSubsystem extends SubsystemBase {
     double ySpeedDelivered = ySpeedCommanded * DriveConstants.kMaxSpeedMetersPerSecond;
     double rotDelivered = m_currentRotation * DriveConstants.kMaxAngularSpeed;
 
+    // convert chassis speed into swerve wheels speed values
     var swerveModuleStates = DriveConstants.kDriveKinematics.toSwerveModuleStates(
         fieldRelative
             ? ChassisSpeeds.fromFieldRelativeSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered,
                 Rotation2d.fromDegrees(-m_gyro.getYaw()))
             : new ChassisSpeeds(xSpeedDelivered, ySpeedDelivered, rotDelivered));
+
+    // ensures wheels don't reach max :0
     SwerveDriveKinematics.desaturateWheelSpeeds(
         swerveModuleStates, DriveConstants.kMaxSpeedMetersPerSecond);
+    
+    // set swerve wheel speeds
     m_frontLeft.setDesiredState(swerveModuleStates[0]);
     m_frontRight.setDesiredState(swerveModuleStates[1]);
     m_rearLeft.setDesiredState(swerveModuleStates[2]);
@@ -297,7 +337,7 @@ public class DriveSubsystem extends SubsystemBase {
   }
 
   /**
-   * Sets the wheels into an X formation to prevent movement.
+   * Sets the wheels into an X formation to prevent movement for starting
    */
   public void setX() {
     m_frontLeft.setDesiredState(new SwerveModuleState(0, Rotation2d.fromDegrees(45)));
@@ -319,10 +359,11 @@ public class DriveSubsystem extends SubsystemBase {
     m_rearLeft.setDesiredState(desiredStates[2]);
     m_rearRight.setDesiredState(desiredStates[3]);
 
+    // commented out log
     // Logger.recordOutput(getName() + DESIRED_SWERVE_STATE_LOG_PATH, desiredStates);
   }
 
-  /** Resets the drive encoders to currently read a position of 0. */
+  /** Resets the drive encoders to currently read a position of 0 at start **/
   public void resetEncoders() {
     m_frontLeft.resetEncoders();
     m_rearLeft.resetEncoders();
@@ -353,10 +394,12 @@ public class DriveSubsystem extends SubsystemBase {
     return m_gyro.getRate() * (DriveConstants.kGyroReversed ? -1.0 : 1.0);
   }
 
+  //Converts the current module states to chassis speeds using the drive kinematics constants
   private ChassisSpeeds getChassisSpeeds() {
     return DriveConstants.kDriveKinematics.toChassisSpeeds(getModuleStates());
   }
 
+  // Retrieves the current state (speed and angle) of each swerve module
   private SwerveModuleState[] getModuleStates() {
     return new SwerveModuleState[] {
         m_frontLeft.getState(),
@@ -366,17 +409,21 @@ public class DriveSubsystem extends SubsystemBase {
     };
   }
 
+  // Drives the robot relative to the field using the provided chassis speeds
   private void driveRobotRelative(ChassisSpeeds speeds) {
-    drive(speeds, false);
+    drive(speeds, false); //calls main drive with fieldRelative = false
   }
 
+  // if wants to be fieldRelative then converts speed to coordinate based off robot pose
   private void drive(ChassisSpeeds speeds, boolean fieldRelative) {
     if (fieldRelative)
       speeds = ChassisSpeeds.fromFieldRelativeSpeeds(speeds, getPose().getRotation());
+
+    // Converts chassis speeds to swerve module states using drive kin
     var swerveModuleStates = DriveConstants.kDriveKinematics.toSwerveModuleStates(speeds);
     SwerveDriveKinematics.desaturateWheelSpeeds(swerveModuleStates, DriveConstants.kMaxSpeedMetersPerSecond);
     setModuleStates(swerveModuleStates);
-  } 
+  }  
 
   /// Log Driverstation Outputs
   private void logOutputs() {
